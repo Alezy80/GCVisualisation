@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.RegularExpressions;
 
 namespace GCVisualisation
 {
@@ -33,6 +34,12 @@ namespace GCVisualisation
 
         static void Main(string[] args)
         {
+            if (args.Length == 0)
+            {
+                Console.WriteLine("usage:");
+                Console.WriteLine($"\t{Path.GetFileNameWithoutExtension(Environment.GetCommandLineArgs()[0])} path_to_program_for_profiling [arg]...");
+                return;
+            }
             // TODO
             // - allow to specify PID of running process (DON'T kill it at the end!!)
             // - put some stats in a "margin" and display the output on the RH 80% of the screen
@@ -58,7 +65,8 @@ namespace GCVisualisation
             var procname = Path.GetFileNameWithoutExtension(exename);
             var existingProcs = Process.GetProcessesByName(procname);
 
-            var process = Process.Start(exename);
+            string strArgs = string.Join(" ", args.Skip(1).Select(EscapeCommandLineArgument));
+            var process = Process.Start(exename, strArgs);
             
             // check for some shell executing the process, eg comemu/cmder
             if (!process.ProcessName.Equals(procname, StringComparison.OrdinalIgnoreCase))
@@ -455,5 +463,7 @@ namespace GCVisualisation
 
             return colourToUse;
         }
+
+        private static string EscapeCommandLineArgument(string arg) => "\"" + Regex.Replace(Regex.Replace(arg, @"(\\*)" + "\"", @"$1$1\" + "\""), @"(\\+)$", @"$1$1") + "\"";
     }
 }
