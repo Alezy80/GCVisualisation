@@ -26,6 +26,7 @@ namespace GCVisualisation
         private static object ConsoleLock = new object();
         private static object BinningLock = new object();
         private static StreamWriter ReportWriter;
+        private static readonly List<double> Pauses = new List<double>(10_000_000);
 
 
         class ProcessComparer : IEqualityComparer<Process>
@@ -185,6 +186,8 @@ namespace GCVisualisation
 
             totalBytesAllocated = gen0 = gen1 = gen2 = gen2Background = gen3 = 0;
             timeInGc = totalGcPauseTime = largestGcPause = startTime = stopTime = 0;
+            lock (Pauses)
+                Pauses.Clear();
         }
 
         private static void PrintSymbolInformation()
@@ -261,7 +264,8 @@ namespace GCVisualisation
 
             var totalGC = gen0 + gen1 + gen2 + gen3;
             var testTime = stopTime - startTime;
-            AppendLine("GC Collections:\n  {0,5:N0} in total ({1:N0} excluding B/G)", totalGC + gen2Background, totalGC);
+            AppendLine("GC Collections:\n  {0,5:N0} in total ({1:N0} excluding B/G)", totalGC + gen2Background,
+                totalGC);
             AppendLine("  {0,5:N0} - generation 0 - {1}", gen0, Statistics(binning[0]));
             AppendLine("  {0,5:N0} - generation 1 - {1}", gen1, Statistics(binning[1]));
             AppendLine("  {0,5:N0} - generation 2 - {1}", gen2, Statistics(binning[2]));
@@ -273,6 +277,24 @@ namespace GCVisualisation
             AppendLine("Time in test: {0,12:N2} ms ({1:P2} spent in GC)", testTime, timeInGc / testTime);
             AppendLine("Total GC Pause time  : {0,12:N2} ms", totalGcPauseTime);
             AppendLine("Largest GC Pause time: {0,12:N2} ms", largestGcPause);
+
+            List<double> pausesCopy;
+            lock (Pauses)
+            {
+                pausesCopy = new List<double>(Pauses);
+            }
+
+            var pauseSamples = pausesCopy.Count;
+            if (pauseSamples > 10)
+            {
+                pausesCopy.Sort();
+                AppendLine("");
+                AppendLine($"Total pause samples {pauseSamples}");
+
+                foreach (var percentile in DefaultPercentiles)
+                    if (pauseSamples > 100.0 / (100.0 - percentile))
+                        AppendLine($"Pause with p{percentile:F2}%     {pausesCopy[(int)(pauseSamples * percentile / 100)],12:N2} ms");
+            }
 
             var strReport = report.ToString();
             Console.ForegroundColor = ConsoleColor.DarkYellow;
@@ -287,6 +309,9 @@ namespace GCVisualisation
                 report.AppendLine(string.Format(format, args));
             }
         }
+
+        private static readonly double[] DefaultPercentiles = { 50.0, 90, 95, 99, 99.9, 99.99 };
+
 
         private static void StartProcessingEvents()
         {
@@ -443,6 +468,9 @@ namespace GCVisualisation
                 totalGcPauseTime += pauseDurationMSec;
                 if (pauseDurationMSec > largestGcPause)
                     largestGcPause = pauseDurationMSec;
+
+                lock (Pauses)
+                    Pauses.Add(pauseDurationMSec);
 
                 lock (ConsoleLock)
                 {
