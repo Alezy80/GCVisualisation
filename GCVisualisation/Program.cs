@@ -25,6 +25,8 @@ namespace GCVisualisation
 
         private static object ConsoleLock = new object();
         private static object BinningLock = new object();
+        private static StreamWriter ReportWriter;
+
 
         class ProcessComparer : IEqualityComparer<Process>
         {
@@ -40,6 +42,7 @@ namespace GCVisualisation
                 Console.WriteLine($"\t{Path.GetFileNameWithoutExtension(Environment.GetCommandLineArgs()[0])} path_to_program_for_profiling [arg]...");
                 return;
             }
+
             // TODO
             // - allow to specify PID of running process (DON'T kill it at the end!!)
             // - put some stats in a "margin" and display the output on the RH 80% of the screen
@@ -61,13 +64,14 @@ namespace GCVisualisation
             var processingTask = Task.Factory.StartNew(StartProcessingEvents, TaskCreationOptions.LongRunning);
 
             var exename = args[0];
+            ReportWriter = new StreamWriter(Path.GetDirectoryName(exename) + "\\GCReport.txt", true);
 
             var procname = Path.GetFileNameWithoutExtension(exename);
             var existingProcs = Process.GetProcessesByName(procname);
 
             string strArgs = string.Join(" ", args.Skip(1).Select(EscapeCommandLineArgument));
             var process = Process.Start(exename, strArgs);
-            
+
             // check for some shell executing the process, eg comemu/cmder
             if (!process.ProcessName.Equals(procname, StringComparison.OrdinalIgnoreCase))
             {
@@ -103,6 +107,8 @@ namespace GCVisualisation
                 }
             }
 
+            ReportWriter.WriteLine(new String('=', 80));
+            ReportWriter.WriteLine($"Starting process {process.ProcessName} PID={process.Id}");
             ProcessIdsUsedInRuns.Add(process.Id);
             Console.CancelKeyPress += (sender, e) =>
             {
@@ -114,7 +120,7 @@ namespace GCVisualisation
             };
 
             PrintSymbolInformation();
-            
+
             Console.WriteLine("Visualising GC Events, press <ENTER>, <ESC> or 'q' to exit");
             Console.WriteLine("You can also push 's' at any time and the current summary will be displayed");
             Console.WriteLine("You can also push 'r' at any time to reset the counters");
@@ -130,7 +136,7 @@ namespace GCVisualisation
 
                 cki = Console.ReadKey();
                 if (cki.Key == ConsoleKey.Enter ||
-                    cki.Key == ConsoleKey.Escape || 
+                    cki.Key == ConsoleKey.Escape ||
                     cki.Key == ConsoleKey.Q)
                 {
                     break;
@@ -158,7 +164,7 @@ namespace GCVisualisation
             Thread.Sleep(3000);
             // Now kill the session completely
             session.Dispose();
-            
+
             var completed = processingTask.Wait(millisecondsTimeout: 3000);
             if (!completed)
                 Console.WriteLine("\nWait timed out, the Processing Task is still running");
@@ -224,9 +230,9 @@ namespace GCVisualisation
             //var stdev = bin.Count == 1 ? 0 : Math.Sqrt(bin.Sum(x => Math.Pow(x - avg, 2)) / (bin.Count - 1));
 
             const int DIVISIONS = 10;
-            var d = max/DIVISIONS;
+            var d = max / DIVISIONS;
 
-            var lu = bin.ToLookup(x => (int)( x / d));
+            var lu = bin.ToLookup(x => (int)(x / d));
 
             var maxlen = lu.Max(x => x.Count());
 
@@ -247,29 +253,39 @@ namespace GCVisualisation
         private static void PrintSummaryInfo()
         {
             session.Flush();
-            Console.ForegroundColor = ConsoleColor.DarkYellow;
-
-            Console.WriteLine("\nMemory Allocations:");
+            var report = new StringBuilder(1024);
+            AppendLine("\nMemory Allocations:");
             // 100GB = 107,374,182,400 bytes, so min-width = 15
-            Console.WriteLine("  {0,15:N0} bytes currently allocated", GC.GetTotalMemory(forceFullCollection: false));
-            Console.WriteLine("  {0,15:N0} bytes have been allocated in total", totalBytesAllocated);
+            AppendLine("  {0,15:N0} bytes currently allocated", GC.GetTotalMemory(forceFullCollection: false));
+            AppendLine("  {0,15:N0} bytes have been allocated in total", totalBytesAllocated);
 
             var totalGC = gen0 + gen1 + gen2 + gen3;
             var testTime = stopTime - startTime;
-            Console.WriteLine("GC Collections:\n  {0,5:N0} in total ({1:N0} excluding B/G)", totalGC + gen2Background, totalGC);
-            Console.WriteLine("  {0,5:N0} - generation 0 - {1}", gen0, Statistics(binning[0]));
-            Console.WriteLine("  {0,5:N0} - generation 1 - {1}", gen1, Statistics(binning[1]));
-            Console.WriteLine("  {0,5:N0} - generation 2 - {1}", gen2, Statistics(binning[2]));
-            Console.WriteLine("  {0,5:N0} - generation 2 (B/G)", gen2Background);
+            AppendLine("GC Collections:\n  {0,5:N0} in total ({1:N0} excluding B/G)", totalGC + gen2Background, totalGC);
+            AppendLine("  {0,5:N0} - generation 0 - {1}", gen0, Statistics(binning[0]));
+            AppendLine("  {0,5:N0} - generation 1 - {1}", gen1, Statistics(binning[1]));
+            AppendLine("  {0,5:N0} - generation 2 - {1}", gen2, Statistics(binning[2]));
+            AppendLine("  {0,5:N0} - generation 2 (B/G)", gen2Background);
             if (gen3 > 0)
-                Console.WriteLine("  {0,5:N0} - generation 3 (LOH)", gen3);
+                AppendLine("  {0,5:N0} - generation 3 (LOH)", gen3);
 
-            Console.WriteLine("Time in GC  : {0,12:N2} ms ({1:N2} ms avg per/GC) ", timeInGc, timeInGc / totalGC);
-            Console.WriteLine("Time in test: {0,12:N2} ms ({1:P2} spent in GC)", testTime, timeInGc / testTime);
-            Console.WriteLine("Total GC Pause time  : {0,12:N2} ms", totalGcPauseTime);
-            Console.WriteLine("Largest GC Pause time: {0,12:N2} ms", largestGcPause);
+            AppendLine("Time in GC  : {0,12:N2} ms ({1:N2} ms avg per/GC) ", timeInGc, timeInGc / totalGC);
+            AppendLine("Time in test: {0,12:N2} ms ({1:P2} spent in GC)", testTime, timeInGc / testTime);
+            AppendLine("Total GC Pause time  : {0,12:N2} ms", totalGcPauseTime);
+            AppendLine("Largest GC Pause time: {0,12:N2} ms", largestGcPause);
 
+            var strReport = report.ToString();
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.WriteLine(strReport);
             Console.ResetColor();
+            ReportWriter.WriteLine(new String('-', 80));
+            ReportWriter.Write(strReport);
+            ReportWriter.Flush();
+
+            void AppendLine(string format, params object[] args)
+            {
+                report.AppendLine(string.Format(format, args));
+            }
         }
 
         private static void StartProcessingEvents()
@@ -282,9 +298,12 @@ namespace GCVisualisation
 
                 lock (ConsoleLock)
                 {
-                    Console.WriteLine("\nCONCURRENT_GC = {0}, SERVER_GC = {1}",
-                                    (runtimeData.StartupFlags & StartupFlags.CONCURRENT_GC) == StartupFlags.CONCURRENT_GC,
-                                    (runtimeData.StartupFlags & StartupFlags.SERVER_GC) == StartupFlags.SERVER_GC);
+                    var gcType = string.Format("\nCONCURRENT_GC = {0}, SERVER_GC = {1}",
+                        (runtimeData.StartupFlags & StartupFlags.CONCURRENT_GC) == StartupFlags.CONCURRENT_GC,
+                        (runtimeData.StartupFlags & StartupFlags.SERVER_GC) == StartupFlags.SERVER_GC);
+                    Console.WriteLine(gcType);
+                    ReportWriter.WriteLine(gcType);
+                    ReportWriter.Flush();
                 }
             };
 
@@ -429,7 +448,7 @@ namespace GCVisualisation
                 {
                     Console.ResetColor();
                     Console.Write(pauseText.ToString());
-                }          
+                }
             };
 
             session.Source.Process();
